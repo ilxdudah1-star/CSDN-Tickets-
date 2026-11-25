@@ -37,19 +37,16 @@ const TICKET_TYPES = {
   denuncia: {
     name: 'Denúncia',
     emoji: '🚨',
-    prefix: 'denuncia',
     color: 0xA43E42
   },
   internos: {
     name: 'Assuntos internos',
     emoji: '📋',
-    prefix: 'internos',
     color: 0x365C8C
   },
   revogacoes: {
     name: 'Revogações',
     emoji: '📁',
-    prefix: 'revogacoes',
     color: 0x397451
   }
 };
@@ -75,23 +72,18 @@ function loadDatabase() {
     return initial;
   }
 
-  try {
-    const parsed = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
+  const parsed = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
 
-    if (!parsed.tickets || typeof parsed.tickets !== 'object') {
-      parsed.tickets = {};
-    }
-
-    if (!Number.isInteger(parsed.nextNumber) || parsed.nextNumber < 1) {
-      const nums = Object.values(parsed.tickets).map(t => Number(t.number) || 0);
-      parsed.nextNumber = Math.max(0, ...nums) + 1;
-    }
-
-    return parsed;
-  } catch (error) {
-    console.error('Erro ao ler tickets.json:', error);
-    throw new Error('O arquivo data/tickets.json está inválido.');
+  if (!parsed.tickets || typeof parsed.tickets !== 'object') {
+    parsed.tickets = {};
   }
+
+  if (!Number.isInteger(parsed.nextNumber) || parsed.nextNumber < 1) {
+    const numbers = Object.values(parsed.tickets).map(t => Number(t.number) || 0);
+    parsed.nextNumber = Math.max(0, ...numbers) + 1;
+  }
+
+  return parsed;
 }
 
 let db = loadDatabase();
@@ -121,18 +113,7 @@ function formatDate(timestamp) {
 }
 
 function ticketNumber(number) {
-  return `#${String(number).padStart(3, '0')}`;
-}
-
-function cleanChannelName(value) {
-  return value
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase()
-    .replace(/[^a-z0-9-]/g, '-')
-    .replace(/-+/g, '-')
-    .replace(/^-|-$/g, '')
-    .slice(0, 85) || 'atendimento';
+  return `#${String(number).padStart(5, '0')}`;
 }
 
 function countWords(value) {
@@ -162,7 +143,6 @@ async function requireTicketStaff(interaction) {
       content: 'Este comando só pode ser usado dentro de um ticket aberto.',
       ephemeral: true
     });
-
     return null;
   }
 
@@ -171,7 +151,6 @@ async function requireTicketStaff(interaction) {
       content: 'Você não tem autorização para administrar este ticket.',
       ephemeral: true
     });
-
     return null;
   }
 
@@ -189,7 +168,7 @@ const commands = [
 
   new SlashCommandBuilder()
     .setName('add')
-    .setDescription('Adicionar cargo ou usuário somente a este ticket')
+    .setDescription('Adicionar cargo ou usuário ao ticket')
     .addRoleOption(o =>
       o.setName('cargo')
         .setDescription('Cargo que terá acesso')
@@ -203,7 +182,7 @@ const commands = [
 
   new SlashCommandBuilder()
     .setName('remove')
-    .setDescription('Remover cargo ou usuário somente deste ticket')
+    .setDescription('Remover cargo ou usuário do ticket')
     .addRoleOption(o =>
       o.setName('cargo')
         .setDescription('Cargo que perderá acesso')
@@ -217,26 +196,7 @@ const commands = [
 
   new SlashCommandBuilder()
     .setName('listar')
-    .setDescription('Listar quem tem acesso a este ticket'),
-
-  new SlashCommandBuilder()
-    .setName('buscar-ticket')
-    .setDescription('Consultar um ticket pelo número')
-    .addIntegerOption(o =>
-      o.setName('numero')
-        .setDescription('Número do ticket, sem #')
-        .setRequired(true)
-        .setMinValue(1)
-    ),
-
-  new SlashCommandBuilder()
-    .setName('buscar-fechamentos')
-    .setDescription('Consultar tickets fechados por um usuário')
-    .addUserOption(o =>
-      o.setName('usuario')
-        .setDescription('Responsável pelo fechamento')
-        .setRequired(true)
-    )
+    .setDescription('Listar os acessos adicionais do ticket')
 ].map(command => command.toJSON());
 
 // =====================================================
@@ -268,9 +228,9 @@ client.on('interactionCreate', async interaction => {
   try {
     if (!interaction.guild) return;
 
-    // =========================================
+    // =================================================
     // COMANDOS
-    // =========================================
+    // =================================================
 
     if (interaction.isChatInputCommand()) {
       const command = interaction.commandName;
@@ -331,136 +291,6 @@ client.on('interactionCreate', async interaction => {
         });
       }
 
-      // BUSCAR TICKET
-
-      if (command === 'buscar-ticket') {
-        if (!(await isStaff(interaction))) {
-          return interaction.reply({
-            content: 'Somente a equipe autorizada pode consultar o histórico.',
-            ephemeral: true
-          });
-        }
-
-        const number = interaction.options.getInteger('numero');
-        const ticket = db.tickets[String(number)];
-
-        if (!ticket) {
-          return interaction.reply({
-            content: `Não encontrei o ticket ${ticketNumber(number)}.`,
-            ephemeral: true
-          });
-        }
-
-        const embed = new EmbedBuilder()
-          .setColor(0x17365D)
-          .setTitle(`📁 Histórico do ticket ${ticketNumber(number)}`)
-          .addFields(
-            {
-              name: 'Situação',
-              value: ticket.status === 'closed' ? 'Fechado' : 'Aberto',
-              inline: true
-            },
-            {
-              name: 'Tipo',
-              value: TICKET_TYPES[ticket.type]?.name || ticket.type,
-              inline: true
-            },
-            {
-              name: 'Quem abriu',
-              value: `${ticket.openerName || 'Não registrado'}\nID: ${ticket.ownerId}`
-            },
-            {
-              name: 'Nick(s) informado(s)',
-              value: (ticket.involvedNicks || 'Não informado').slice(0, 1024)
-            },
-            {
-              name: 'Resumo inicial',
-              value: (ticket.summary || 'Não informado').slice(0, 1024)
-            },
-            {
-              name: 'Quem reivindicou',
-              value: ticket.claimedId
-                ? `${ticket.claimerName || 'Não registrado'}\nID: ${ticket.claimedId}`
-                : 'Não reivindicado',
-              inline: true
-            },
-            {
-              name: 'Quem fechou',
-              value: ticket.closerId
-                ? `${ticket.closerName || 'Não registrado'}\nID: ${ticket.closerId}`
-                : 'Ainda aberto',
-              inline: true
-            },
-            {
-              name: 'Motivo do fechamento',
-              value: (ticket.closeReason || 'Ainda não fechado').slice(0, 1024)
-            },
-            {
-              name: 'Data e horário',
-              value: ticket.closedAt
-                ? formatDate(ticket.closedAt)
-                : formatDate(ticket.openedAt),
-              inline: true
-            },
-            {
-              name: 'Canal',
-              value: ticket.channelId ? `<#${ticket.channelId}>` : 'Canal indisponível',
-              inline: true
-            }
-          )
-          .setFooter({
-            text: 'Central de Atendimento • Consulta interna'
-          });
-
-        return interaction.reply({
-          embeds: [embed],
-          ephemeral: true
-        });
-      }
-
-      // BUSCAR FECHAMENTOS
-
-      if (command === 'buscar-fechamentos') {
-        if (!(await isStaff(interaction))) {
-          return interaction.reply({
-            content: 'Somente a equipe autorizada pode consultar o histórico.',
-            ephemeral: true
-          });
-        }
-
-        const user = interaction.options.getUser('usuario');
-
-        const closed = Object.values(db.tickets)
-          .filter(t => t.status === 'closed' && t.closerId === user.id)
-          .sort((a, b) => (b.closedAt || 0) - (a.closedAt || 0));
-
-        if (!closed.length) {
-          return interaction.reply({
-            content: `Não encontrei fechamentos registrados para <@${user.id}>.`,
-            ephemeral: true
-          });
-        }
-
-        const lines = closed.slice(0, 20).map(t =>
-          `**${ticketNumber(t.number)}** • ` +
-          `${TICKET_TYPES[t.type]?.name || t.type} • ` +
-          `${formatDate(t.closedAt)} • ${t.closeReason || 'Sem motivo'}`
-        );
-
-        const embed = new EmbedBuilder()
-          .setColor(0x17365D)
-          .setTitle(`📋 Fechamentos de ${user.tag}`)
-          .setDescription(lines.join('\n').slice(0, 4000))
-          .setFooter({
-            text: `${closed.length} registro(s) encontrado(s). Exibindo até 20.`
-          });
-
-        return interaction.reply({
-          embeds: [embed],
-          ephemeral: true
-        });
-      }
-
       // ADD / REMOVE / LISTAR
 
       if (['add', 'remove', 'listar'].includes(command)) {
@@ -478,7 +308,7 @@ client.on('interactionCreate', async interaction => {
               `**Acessos adicionais deste ticket:**\n` +
               `**Cargos:** ${roles.length ? roles.join(', ') : 'Nenhum'}\n` +
               `**Usuários:** ${users.length ? users.join(', ') : 'Nenhum'}\n\n` +
-              'O autor e o cargo de atendimento também possuem acesso.',
+              'O autor e a equipe de atendimento também possuem acesso.',
             ephemeral: true
           });
         }
@@ -506,14 +336,13 @@ client.on('interactionCreate', async interaction => {
             });
           }
 
-          ticket[listKey].push(targetId);
-
           await channel.permissionOverwrites.edit(targetId, {
             ViewChannel: true,
             SendMessages: true,
             ReadMessageHistory: true
           });
 
+          ticket[listKey].push(targetId);
           saveDatabase();
 
           return interaction.reply({
@@ -524,15 +353,14 @@ client.on('interactionCreate', async interaction => {
 
         if (!ticket[listKey].includes(targetId)) {
           return interaction.reply({
-            content: 'Esse cargo/usuário não está na lista de acessos adicionais deste ticket.',
+            content: 'Esse acesso não está configurado neste ticket.',
             ephemeral: true
           });
         }
 
-        ticket[listKey] = ticket[listKey].filter(id => id !== targetId);
-
         await channel.permissionOverwrites.delete(targetId).catch(() => {});
 
+        ticket[listKey] = ticket[listKey].filter(id => id !== targetId);
         saveDatabase();
 
         return interaction.reply({
@@ -542,9 +370,9 @@ client.on('interactionCreate', async interaction => {
       }
     }
 
-    // =========================================
+    // =================================================
     // BOTÕES
-    // =========================================
+    // =================================================
 
     if (interaction.isButton()) {
 
@@ -578,14 +406,14 @@ client.on('interactionCreate', async interaction => {
         const nicks = new TextInputBuilder()
           .setCustomId('nicks')
           .setLabel('Nick(s) dos indivíduos envolvidos')
-          .setPlaceholder('Informe os nicks. Se não houver, escreva "Não se aplica".')
+          .setPlaceholder('Informe os nicks. Se não houver, escreva Não se aplica.')
           .setStyle(TextInputStyle.Paragraph)
           .setRequired(true)
           .setMaxLength(1000);
 
         const summary = new TextInputBuilder()
           .setCustomId('resumo')
-          .setLabel('Resumo do que deseja resolver (até 170 palavras)')
+          .setLabel('Resumo da solicitação (até 170 palavras)')
           .setPlaceholder('Explique brevemente o assunto do atendimento...')
           .setStyle(TextInputStyle.Paragraph)
           .setRequired(true)
@@ -672,9 +500,9 @@ client.on('interactionCreate', async interaction => {
       }
     }
 
-    // =========================================
+    // =================================================
     // FORMULÁRIOS
-    // =========================================
+    // =================================================
 
     if (interaction.isModalSubmit()) {
 
@@ -704,7 +532,6 @@ client.on('interactionCreate', async interaction => {
 
         const involvedNicks = interaction.fields.getTextInputValue('nicks').trim();
         const summary = interaction.fields.getTextInputValue('resumo').trim();
-        const words = countWords(summary);
 
         if (!involvedNicks || !summary) {
           return interaction.editReply({
@@ -712,9 +539,11 @@ client.on('interactionCreate', async interaction => {
           });
         }
 
+        const words = countWords(summary);
+
         if (words > 170) {
           return interaction.editReply({
-            content: `O resumo tem ${words} palavras. O limite é de 170. Envie novamente pelo painel.`
+            content: `Seu resumo possui ${words} palavras. O limite é de 170.`
           });
         }
 
@@ -746,14 +575,14 @@ client.on('interactionCreate', async interaction => {
         db.tickets[String(number)] = record;
         saveDatabase();
 
+        let createdChannel = null;
+
         try {
-          const channel = await interaction.guild.channels.create({
-            name: cleanChannelName(
-              `${String(number).padStart(3, '0')}-${type.prefix}-${interaction.user.username}`
-            ),
+          createdChannel = await interaction.guild.channels.create({
+            name: `ticket-${String(number).padStart(5, '0')}`,
             type: ChannelType.GuildText,
             parent: CATEGORY_ID,
-            topic: `Central de Atendimento | Ticket ${ticketNumber(number)} | Autor ${interaction.user.id}`,
+            topic: `Central de Atendimento | ${ticketNumber(number)} | Autor ${interaction.user.id}`,
 
             permissionOverwrites: [
               {
@@ -788,14 +617,15 @@ client.on('interactionCreate', async interaction => {
             ]
           });
 
-          record.channelId = channel.id;
+          record.channelId = createdChannel.id;
           saveDatabase();
 
           const embed = new EmbedBuilder()
             .setColor(type.color)
             .setTitle(`${type.emoji} ${type.name.toUpperCase()} • ${ticketNumber(number)}`)
             .setDescription(
-              `Olá, <@${interaction.user.id}>! Seu atendimento foi criado. A equipe responderá assim que possível.`
+              `Olá, <@${interaction.user.id}>! Seu atendimento foi criado.\n` +
+              'A equipe responderá assim que possível.'
             )
             .addFields(
               {
@@ -840,18 +670,22 @@ client.on('interactionCreate', async interaction => {
               .setStyle(ButtonStyle.Danger)
           );
 
-          await channel.send({
+          await createdChannel.send({
             content: `<@${interaction.user.id}> <@&${SUPPORT_ROLE_ID}>`,
             embeds: [embed],
             components: [controls]
           });
 
           return interaction.editReply({
-            content: `✅ Seu atendimento ${ticketNumber(number)} foi criado: ${channel}`
+            content: `✅ Seu atendimento ${ticketNumber(number)} foi criado: ${createdChannel}`
           });
 
         } catch (error) {
           console.error('Erro ao criar ticket:', error);
+
+          if (createdChannel) {
+            await createdChannel.delete('Falha durante a criação do ticket').catch(() => {});
+          }
 
           delete db.tickets[String(number)];
           db.nextNumber = Math.min(db.nextNumber, number);
@@ -892,7 +726,11 @@ client.on('interactionCreate', async interaction => {
           });
         }
 
+        const channel = interaction.channel;
+
         try {
+          // LOCALIZAR CANAL DE RELATÓRIOS
+
           const logChannel = await interaction.guild.channels.fetch(LOG_CHANNEL_ID);
 
           if (!logChannel || logChannel.type !== ChannelType.GuildText) {
@@ -904,31 +742,7 @@ client.on('interactionCreate', async interaction => {
           const closer = await interaction.guild.members.fetch(interaction.user.id);
           const closedAt = Date.now();
 
-          // O canal permanece na categoria atual.
-          // O autor perde acesso e a equipe mantém consulta.
-
-          await interaction.channel.permissionOverwrites.edit(ticket.ownerId, {
-            ViewChannel: false,
-            SendMessages: false,
-            ReadMessageHistory: false
-          });
-
-          await interaction.channel.permissionOverwrites.edit(SUPPORT_ROLE_ID, {
-            ViewChannel: true,
-            ReadMessageHistory: true,
-            SendMessages: false
-          });
-
-          for (const id of [
-            ...(ticket.allowedRoleIds || []),
-            ...(ticket.allowedUserIds || [])
-          ]) {
-            await interaction.channel.permissionOverwrites.edit(id, {
-              ViewChannel: true,
-              ReadMessageHistory: true,
-              SendMessages: false
-            }).catch(() => {});
-          }
+          // REGISTRAR FECHAMENTO
 
           ticket.status = 'closed';
           ticket.closerId = interaction.user.id;
@@ -945,57 +759,134 @@ client.on('interactionCreate', async interaction => {
             .setTitle(`📋 RELATÓRIO DE ATENDIMENTO • ${ticketNumber(ticket.number)}`)
             .addFields(
               {
-                name: '📝 Motivo do fechamento',
-                value: reason.slice(0, 1024)
+                name: '📂 Tipo de atendimento',
+                value: TICKET_TYPES[ticket.type]?.name || ticket.type,
+                inline: true
               },
               {
                 name: '👤 Quem abriu',
                 value:
                   `${ticket.openerName || 'Não registrado'}\n` +
-                  `<@${ticket.ownerId}> | ID: ${ticket.ownerId}`
+                  `<@${ticket.ownerId}>`
               },
               {
                 name: '🙋 Quem reivindicou',
                 value: ticket.claimedId
-                  ? `${ticket.claimerName || 'Não registrado'}\n<@${ticket.claimedId}> | ID: ${ticket.claimedId}`
+                  ? `${ticket.claimerName || 'Não registrado'}\n<@${ticket.claimedId}>`
                   : 'Não reivindicado'
               },
               {
                 name: '🔒 Quem fechou',
                 value:
                   `${closer.displayName}\n` +
-                  `<@${interaction.user.id}> | ID: ${interaction.user.id}`
+                  `<@${interaction.user.id}>`
               },
               {
-                name: '📅 Data e horário do fechamento',
+                name: '📝 Motivo do fechamento',
+                value: reason.slice(0, 1024)
+              },
+              {
+                name: '📅 Data e horário',
                 value: formatDate(closedAt)
               }
             )
             .setFooter({
-              text: `Central de Atendimento • ${ticketNumber(ticket.number)} • Canal ${interaction.channelId}`
+              text: `Central de Atendimento • ${ticketNumber(ticket.number)}`
             });
 
-          await logChannel.send({
-            embeds: [report]
-          });
+          // ENVIAR RELATÓRIO ANTES DE EXCLUIR
 
-          await interaction.channel.send({
-            content:
-              `🔒 ${ticketNumber(ticket.number)} encerrado por ${interaction.user}. ` +
-              'O acesso do solicitante foi removido.'
-          });
+          try {
+            await logChannel.send({
+              embeds: [report]
+            });
+          } catch (reportError) {
+            console.error('Erro ao enviar relatório:', reportError);
 
-          return interaction.editReply({
-            content:
-              `✅ ${ticketNumber(ticket.number)} fechado. ` +
-              'O canal permaneceu na categoria atual e o relatório resumido foi enviado.'
-          });
+            // REABRIR O REGISTRO CASO O RELATÓRIO FALHE
+
+            ticket.status = 'open';
+            ticket.closerId = null;
+            ticket.closerName = null;
+            ticket.closeReason = null;
+            ticket.closedAt = null;
+
+            saveDatabase();
+
+            return interaction.editReply({
+              content: '❌ O relatório não pôde ser enviado. O ticket continua aberto. Confira as permissões do canal de registros.'
+            });
+          }
+
+          // EXCLUSÃO DEFINITIVA DO CANAL
+
+          try {
+            await channel.delete(
+              `Ticket ${ticketNumber(ticket.number)} encerrado por ${closer.displayName}`
+            );
+
+            return interaction.editReply({
+              content:
+                `✅ ${ticketNumber(ticket.number)} fechado com sucesso!\n` +
+                '📋 Relatório enviado ao canal de registros.\n' +
+                '🗑️ Canal do atendimento excluído definitivamente.'
+            });
+
+          } catch (deleteError) {
+            console.error('Erro ao excluir canal:', deleteError);
+
+            // PLANO ALTERNATIVO: OCULTAR O CANAL
+
+            try {
+              await channel.permissionOverwrites.edit(interaction.guild.id, {
+                ViewChannel: false
+              });
+
+              await channel.permissionOverwrites.edit(ticket.ownerId, {
+                ViewChannel: false,
+                SendMessages: false,
+                ReadMessageHistory: false
+              });
+
+              await channel.permissionOverwrites.edit(SUPPORT_ROLE_ID, {
+                ViewChannel: false,
+                SendMessages: false,
+                ReadMessageHistory: false
+              });
+
+              for (const id of [
+                ...(ticket.allowedRoleIds || []),
+                ...(ticket.allowedUserIds || [])
+              ]) {
+                await channel.permissionOverwrites.edit(id, {
+                  ViewChannel: false,
+                  SendMessages: false,
+                  ReadMessageHistory: false
+                }).catch(() => {});
+              }
+
+              return interaction.editReply({
+                content:
+                  `✅ ${ticketNumber(ticket.number)} fechado e relatório enviado.\n` +
+                  '⚠️ Não foi possível excluir o canal, mas ele foi ocultado dos membros.'
+              });
+
+            } catch (hideError) {
+              console.error('Erro ao ocultar canal:', hideError);
+
+              return interaction.editReply({
+                content:
+                  'O relatório foi enviado e o ticket foi registrado como fechado, ' +
+                  'mas houve um erro ao excluir e ocultar o canal. Verifique as permissões do bot.'
+              });
+            }
+          }
 
         } catch (error) {
           console.error('Erro ao fechar ticket:', error);
 
           return interaction.editReply({
-            content: 'Ocorreu um erro ao fechar o ticket. Confira as permissões do bot e o canal de relatórios.'
+            content: 'Ocorreu um erro durante o fechamento. Confira as permissões do bot e as configurações.'
           });
         }
       }
@@ -1009,7 +900,7 @@ client.on('interactionCreate', async interaction => {
         content: 'Ocorreu um erro ao executar esta ação.',
         ephemeral: true
       }).catch(() => {});
-    } else if (interaction.deferred) {
+    } else {
       await interaction.editReply({
         content: 'Ocorreu um erro ao executar esta ação.'
       }).catch(() => {});
@@ -1035,7 +926,9 @@ const missing = Object.entries(required)
   .map(([key]) => key);
 
 if (missing.length) {
-  throw new Error(`Faltam configurações nos Secrets: ${missing.join(', ')}`);
+  throw new Error(
+    `Faltam configurações nos Secrets: ${missing.join(', ')}`
+  );
 }
 
 // =====================================================
